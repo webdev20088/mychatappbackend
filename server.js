@@ -17,6 +17,13 @@ const io = new Server(server, {
   }
 });
 
+const cors = require('cors');
+app.use(cors({
+  origin: 'https://messengertrial.netlify.app', // allow Netlify frontend
+  credentials: true,
+}));
+
+
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch(err => console.log(err));
