@@ -9,6 +9,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const cors = require('cors');
+app.use(cors({
+  origin: 'https://messengertrial.netlify.app', // allow Netlify frontend
+  credentials: true,
+}));
+
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -17,11 +24,6 @@ const io = new Server(server, {
   }
 });
 
-const cors = require('cors');
-app.use(cors({
-  origin: 'https://messengertrial.netlify.app', // allow Netlify frontend
-  credentials: true,
-}));
 
 
 mongoose.connect(process.env.MONGO_URI)
