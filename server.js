@@ -7,17 +7,26 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// ✅ CORS setup to allow your Netlify frontend
+app.use(cors({
+  origin: 'https://v1messenger.netlify.app',
+  credentials: true,
+}));
+
 app.use(express.json());
 
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
+    origin: 'https://v1messenger.netlify.app',
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
+// ✅ Use Mongo URI from .env (Atlas or local)
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.log(err));
