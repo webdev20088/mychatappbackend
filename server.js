@@ -10,7 +10,7 @@ const app = express();
 
 // ✅ CORS setup to allow your Netlify frontend
 app.use(cors({
-  origin: 'https://20years-jee-pyq.netlify.app/',
+  origin: 'https://20years-jee-pyq.netlify.app',
   credentials: true,
 }));
 
@@ -20,7 +20,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: 'https://20years-jee-pyq.netlify.app/',
+    origin: 'https://20years-jee-pyq.netlify.app',
     methods: ['GET', 'POST'],
     credentials: true
   }
