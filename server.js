@@ -68,12 +68,12 @@ io.on('connection', (socket) => {
 
   socket.on('joinRoom', (room) => socket.join(room));
 
-  // ✅ Updated to support tagged messages
-  socket.on('sendMessage', async ({ sender, receiver, message, tag, room }) => {
-    const msg = new Message({ sender, receiver, message, tag: tag || null });
-    await msg.save();
-    io.to(room).emit('newMessage', msg);
-  });
+ socket.on('sendMessage', async ({ sender, receiver, message, tag, room }) => {
+  const msg = new Message({ sender, receiver, message, tag: tag || null });
+  await msg.save();
+  io.to(room).emit('newMessage', msg);
+});
+
 
   socket.on('markRead', async ({ user1, user2 }) => {
     await Message.updateMany(
