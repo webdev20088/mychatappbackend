@@ -80,7 +80,9 @@ io.on('connection', (socket) => {
       { sender: user2, receiver: user1, read: false },
       { $set: { read: true } }
     );
-    
+     io.to(`${user1}_${user2}`).emit('refresh');
+     io.to(`${user2}_${user1}`).emit('refresh');
+
   });
 
   socket.on('typing', ({ sender, receiver, isTyping }) => {
