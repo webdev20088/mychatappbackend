@@ -81,7 +81,7 @@ io.on('connection', (socket) => {
       { $set: { read: true } }
     );
      io.to(`${user1}_${user2}`).emit('refresh');
-     io.to(`${user2}_${user1}`).emit('refresh');
+     
 
   });
 
