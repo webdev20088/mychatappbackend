@@ -1,4 +1,3 @@
-// ✅ FINAL server.js (localhost:4000)
 const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
@@ -8,12 +7,10 @@ require('dotenv').config();
 
 const app = express();
 
-// ✅ CORS setup to allow your Netlify frontend
 app.use(cors({
   origin: 'https://20years-jee-pyq.netlify.app',
   credentials: true,
 }));
-
 app.use(express.json());
 
 const server = http.createServer(app);
@@ -26,7 +23,7 @@ const io = new Server(server, {
   }
 });
 
-// ✅ Use Mongo URI from .env (Atlas or local)
+// ✅ MongoDB connection
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.log(err));
@@ -36,12 +33,14 @@ const userSchema = new mongoose.Schema({
   password: String
 });
 
+// ✅ Update message schema to include tag
 const messageSchema = new mongoose.Schema({
   sender: String,
   receiver: String,
   message: String,
   timestamp: { type: Date, default: Date.now },
-  read: { type: Boolean, default: false }
+  read: { type: Boolean, default: false },
+  tag: { type: String, default: null } // ✅ new field
 });
 
 const User = mongoose.model('User', userSchema);
@@ -69,8 +68,9 @@ io.on('connection', (socket) => {
 
   socket.on('joinRoom', (room) => socket.join(room));
 
-  socket.on('sendMessage', async ({ sender, receiver, message, room }) => {
-    const msg = new Message({ sender, receiver, message });
+  // ✅ Updated to support tagged messages
+  socket.on('sendMessage', async ({ sender, receiver, message, tag, room }) => {
+    const msg = new Message({ sender, receiver, message, tag: tag || null });
     await msg.save();
     io.to(room).emit('newMessage', msg);
     io.emit('refresh');
@@ -101,6 +101,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// ✅ Signup API
 app.post('/signup', async (req, res) => {
   const { username, password } = req.body;
   const exists = await User.findOne({ username });
@@ -109,19 +110,23 @@ app.post('/signup', async (req, res) => {
   res.json({ success: true });
 });
 
+// ✅ Login API
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   const user = await User.findOne({ username });
-  if (!user || user.password !== password) return res.status(400).json({ message: 'Invalid' });
+  if (!user || user.password !== password)
+    return res.status(400).json({ message: 'Invalid' });
   res.json({ success: true });
 });
 
+// ✅ Get User by Username
 app.get('/user/:username', async (req, res) => {
   const user = await User.findOne({ username: req.params.username });
   if (!user) return res.status(404).json({ message: 'Not found' });
   res.json({ success: true });
 });
 
+// ✅ Get Messages Between Users
 app.get('/messages', async (req, res) => {
   const { user1, user2 } = req.query;
   const messages = await Message.find({
@@ -131,6 +136,68 @@ app.get('/messages', async (req, res) => {
     ]
   }).sort('timestamp');
   res.json(messages);
+});
+
+// ✅ Admin Panel — All Users Info
+app.get('/admin', async (req, res) => {
+  const { user } = req.query;
+  if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
+
+  const users = await User.find();
+  const userData = users.map(u => ({
+    username: u.username,
+    password: '•••••••',
+    online: onlineUsers[u.username] ? true : false
+  }));
+  res.json(userData);
+});
+
+// ✅ Pairwise Analytics
+app.get('/analytics', async (req, res) => {
+  const { user } = req.query;
+  if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
+
+  const messages = await Message.find();
+  const pairMap = {};
+
+  for (const msg of messages) {
+    const pair = [msg.sender, msg.receiver].sort().join('-');
+    if (!pairMap[pair]) pairMap[pair] = [];
+    pairMap[pair].push(msg);
+  }
+
+  const analytics = Object.entries(pairMap).map(([pair, msgs]) => ({
+    pair,
+    count: msgs.length,
+    estimatedKB: ((JSON.stringify(msgs).length / 1024).toFixed(2)) + ' KB'
+  }));
+
+  res.json(analytics);
+});
+
+// ✅ Admin Trigger: Clear Chat of Any Pair
+app.delete('/analytics/clear', async (req, res) => {
+  const { user, user1, user2 } = req.body;
+  if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
+
+  await Message.deleteMany({
+    $or: [
+      { sender: user1, receiver: user2 },
+      { sender: user2, receiver: user1 }
+    ]
+  });
+  res.json({ success: true, cleared: `${user1} ↔ ${user2}` });
+});
+
+// ✅ Delete a user (Admin only)
+app.delete('/user/:username', async (req, res) => {
+  const { user } = req.body;
+  if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
+
+  const username = req.params.username;
+  await User.deleteOne({ username });
+  await Message.deleteMany({ $or: [{ sender: username }, { receiver: username }] });
+  res.json({ success: true });
 });
 
 server.listen(4000, () => console.log('✅ Server running on port 4000'));
