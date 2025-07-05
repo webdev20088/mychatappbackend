@@ -73,7 +73,6 @@ io.on('connection', (socket) => {
     const msg = new Message({ sender, receiver, message, tag: tag || null });
     await msg.save();
     io.to(room).emit('newMessage', msg);
-    io.emit('refresh');
   });
 
   socket.on('markRead', async ({ user1, user2 }) => {
