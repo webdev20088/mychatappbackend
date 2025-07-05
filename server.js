@@ -80,7 +80,11 @@ io.on('connection', (socket) => {
       { sender: user2, receiver: user1, read: false },
       { $set: { read: true } }
     );
-     io.to(`${user1}_${user2}`).emit('refresh');
+     // ✅ Only notify the sender (user2)
+  const senderSocketId = onlineUsers[user2];
+  if (senderSocketId) {
+    io.to(senderSocketId).emit('refresh');
+  }
      
 
   });
