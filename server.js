@@ -48,6 +48,28 @@ const messageSchema = new mongoose.Schema({
   read: { type: Boolean, default: false },
   tag: { type: String, default: null } // ✅ new field
 });
+// ✅ Add this near the top of your server.js after mongoose models
+async function updateSessionAndLastSeen(username) {
+  const now = new Date();
+  const existing = await UserStats.findOne({ username });
+  if (existing?.lastSeen) {
+    const diff = Math.floor((now - existing.lastSeen) / (1000 * 60)); // minutes
+    await UserStats.findOneAndUpdate(
+      { username },
+      {
+        $inc: { totalUsageMinutes: diff },
+        $set: { lastSeen: now }
+      },
+      { upsert: true }
+    );
+  } else {
+    await UserStats.findOneAndUpdate(
+      { username },
+      { $set: { lastSeen: now } },
+      { upsert: true }
+    );
+  }
+}
 
 const User = mongoose.model('User', userSchema);
 const Message = mongoose.model('Message', messageSchema);
