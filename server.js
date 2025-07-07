@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
 const { Server } = require('socket.io');
+const PairStats = require('./models/PairStats');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -71,8 +72,20 @@ io.on('connection', (socket) => {
  socket.on('sendMessage', async ({ sender, receiver, message, tag, room }) => {
   const msg = new Message({ sender, receiver, message, tag: tag || null });
   await msg.save();
+
+  const pairKey = [sender, receiver].sort().join('-');
+
+  await PairStats.findOneAndUpdate(
+    { pair: pairKey },
+    {
+      $inc: { totalCount: 1, currentCount: 1 }
+    },
+    { upsert: true, new: true }
+  );
+
   io.to(room).emit('newMessage', msg);
 });
+
 
 
   socket.on('markRead', async ({ user1, user2 }) => {
@@ -162,37 +175,48 @@ app.get('/analytics', async (req, res) => {
   const { user } = req.query;
   if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
 
-  const messages = await Message.find();
-  const pairMap = {};
+  const stats = await PairStats.find();
 
-  for (const msg of messages) {
-    const pair = [msg.sender, msg.receiver].sort().join('-');
-    if (!pairMap[pair]) pairMap[pair] = [];
-    pairMap[pair].push(msg);
-  }
-
-  const analytics = Object.entries(pairMap).map(([pair, msgs]) => ({
-    pair,
-    count: msgs.length,
-    estimatedKB: ((JSON.stringify(msgs).length / 1024).toFixed(2)) + ' KB'
+  const analytics = stats.map(p => ({
+    pair: p.pair,
+    totalCount: p.totalCount,
+    currentCount: p.currentCount,
+    estimatedKB: `${p.estimatedKB || 0} KB`
   }));
 
   res.json(analytics);
 });
 
+
 // ✅ Admin Trigger: Clear Chat of Any Pair
 app.delete('/analytics/clear', async (req, res) => {
-  const { user, user1, user2 } = req.body;
+  const { user, user1, user2, clearTotal } = req.body;
   if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
 
+  const pairKey = [user1, user2].sort().join('-');
+
+  // Delete messages
   await Message.deleteMany({
     $or: [
       { sender: user1, receiver: user2 },
       { sender: user2, receiver: user1 }
     ]
   });
-  res.json({ success: true, cleared: `${user1} ↔ ${user2}` });
+
+  // Reset stats
+  const update = clearTotal
+    ? { totalCount: 0, currentCount: 0 }
+    : { currentCount: 0 };
+
+  await PairStats.findOneAndUpdate(
+    { pair: pairKey },
+    { $set: update },
+    { upsert: true }
+  );
+
+  res.json({ success: true, cleared: pairKey });
 });
+
 
 // ✅ Delete a user (Admin only)
 app.delete('/user/:username', async (req, res) => {
