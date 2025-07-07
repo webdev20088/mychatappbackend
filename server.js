@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
 const { Server } = require('socket.io');
-
 const cors = require('cors');
 require('dotenv').config();
 
@@ -15,10 +14,7 @@ app.use(cors({
 app.use(express.json());
 
 const server = http.createServer(app);
-const PairStats = require('./models/PairStats');
-const UserStats = require('./models/UserStats');
 
-const loginTimestamps = {};
 const io = new Server(server, {
   cors: {
     origin: 'https://20years-jee-pyq.netlify.app',
@@ -34,9 +30,7 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
 
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true },
-  password: String,
-  sessionDuration: { type: Number, default: 0 },  // 🆕 Lifetime usage in minutes
-  lastSeen: { type: Date, default: null }        // Last seen timestamp
+  password: String
 });
 
 // ✅ Update message schema to include tag
@@ -48,28 +42,6 @@ const messageSchema = new mongoose.Schema({
   read: { type: Boolean, default: false },
   tag: { type: String, default: null } // ✅ new field
 });
-// ✅ Add this near the top of your server.js after mongoose models
-async function updateSessionAndLastSeen(username) {
-  const now = new Date();
-  const existing = await UserStats.findOne({ username });
-  if (existing?.lastSeen) {
-    const diff = Math.floor((now - existing.lastSeen) / (1000 * 60)); // minutes
-    await UserStats.findOneAndUpdate(
-      { username },
-      {
-        $inc: { totalUsageMinutes: diff },
-        $set: { lastSeen: now }
-      },
-      { upsert: true }
-    );
-  } else {
-    await UserStats.findOneAndUpdate(
-      { username },
-      { $set: { lastSeen: now } },
-      { upsert: true }
-    );
-  }
-}
 
 const User = mongoose.model('User', userSchema);
 const Message = mongoose.model('Message', messageSchema);
@@ -77,46 +49,19 @@ const Message = mongoose.model('Message', messageSchema);
 let onlineUsers = {};
 
 io.on('connection', (socket) => {
- socket.on('login', async (username) => {
-  onlineUsers[username] = socket.id;
-  await UserStats.findOneAndUpdate(
-    { username },
-    { $set: { lastSeen: new Date() } },
-    { upsert: true }
-  );
-  io.emit('onlineUsers', Object.keys(onlineUsers));
-});
+  socket.on('login', (username) => {
+    onlineUsers[username] = socket.id;
+    io.emit('onlineUsers', Object.keys(onlineUsers));
+  });
 
+  socket.on('logout', (username) => {
+    delete onlineUsers[username];
+    io.emit('onlineUsers', Object.keys(onlineUsers));
+  });
 
-  socket.on('logout', async (username) => {
-  delete onlineUsers[username];
-
-  const userStat = await UserStats.findOne({ username });
-  const now = new Date();
-
-  if (userStat?.lastSeen) {
-    const diff = Math.floor((now - userStat.lastSeen) / (1000 * 60)); // minutes
-    await UserStats.findOneAndUpdate(
-      { username },
-      {
-        $inc: { totalUsageMinutes: diff },
-        $set: { lastSeen: now }
-      },
-      { upsert: true }
-    );
-  }
-
-  io.emit('onlineUsers', Object.keys(onlineUsers));
-});
-
-
-
-  socket.on('disconnect', async () => {
+  socket.on('disconnect', () => {
     for (const [username, id] of Object.entries(onlineUsers)) {
-      if (id === socket.id) 
-        await updateSessionAndLastSeen(username); // ✅ Allowed here
-        delete onlineUsers[username];
-        delete loginTimestamps[username];
+      if (id === socket.id) delete onlineUsers[username];
     }
     io.emit('onlineUsers', Object.keys(onlineUsers));
   });
@@ -126,25 +71,8 @@ io.on('connection', (socket) => {
  socket.on('sendMessage', async ({ sender, receiver, message, tag, room }) => {
   const msg = new Message({ sender, receiver, message, tag: tag || null });
   await msg.save();
-
-  const pairKey = [sender, receiver].sort().join('-');
-
-  await PairStats.findOneAndUpdate(
-    { pair: pairKey },
-    {
-      $inc: { totalCount: 1, currentCount: 1 }
-    },
-    { upsert: true, new: true }
-  );
-
-  // 🆕 Increment lifetime usage (1 minute per message)
-  await User.updateOne({ username: sender }, { $inc: { sessionDuration: 1 } });
-  await User.updateOne({ username: receiver }, { $inc: { sessionDuration: 1 } });
-
   io.to(room).emit('newMessage', msg);
 });
-
-
 
 
   socket.on('markRead', async ({ user1, user2 }) => {
@@ -216,25 +144,16 @@ app.get('/messages', async (req, res) => {
 });
 
 // ✅ Admin Panel — All Users Info
-// ✅ Admin Panel — All Users Info
 app.get('/admin', async (req, res) => {
   const { user } = req.query;
   if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
 
   const users = await User.find();
-  const stats = await UserStats.find();
-
-  const userData = users.map(u => {
-    const stat = stats.find(s => s.username === u.username);
-    return {
-      username: u.username,
-      password: '•••••••',
-      online: onlineUsers[u.username] ? true : false,
-      totalUsageMinutes: stat?.totalUsageMinutes || 0,
-      lastSeen: onlineUsers[u.username] ? 'Online' : (stat?.lastSeen ? stat.lastSeen.toISOString() : 'N/A')
-    };
-  });
-
+  const userData = users.map(u => ({
+    username: u.username,
+    password: '•••••••',
+    online: onlineUsers[u.username] ? true : false
+  }));
   res.json(userData);
 });
 
@@ -243,48 +162,37 @@ app.get('/analytics', async (req, res) => {
   const { user } = req.query;
   if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
 
-  const stats = await PairStats.find();
+  const messages = await Message.find();
+  const pairMap = {};
 
-  const analytics = stats.map(p => ({
-    pair: p.pair,
-    totalCount: p.totalCount,
-    currentCount: p.currentCount,
-    estimatedKB: `${p.estimatedKB || 0} KB`
+  for (const msg of messages) {
+    const pair = [msg.sender, msg.receiver].sort().join('-');
+    if (!pairMap[pair]) pairMap[pair] = [];
+    pairMap[pair].push(msg);
+  }
+
+  const analytics = Object.entries(pairMap).map(([pair, msgs]) => ({
+    pair,
+    count: msgs.length,
+    estimatedKB: ((JSON.stringify(msgs).length / 1024).toFixed(2)) + ' KB'
   }));
 
   res.json(analytics);
 });
 
-
 // ✅ Admin Trigger: Clear Chat of Any Pair
 app.delete('/analytics/clear', async (req, res) => {
-  const { user, user1, user2, clearTotal } = req.body;
+  const { user, user1, user2 } = req.body;
   if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
 
-  const pairKey = [user1, user2].sort().join('-');
-
-  // Delete messages
   await Message.deleteMany({
     $or: [
       { sender: user1, receiver: user2 },
       { sender: user2, receiver: user1 }
     ]
   });
-
-  // Reset stats
-  const update = clearTotal
-    ? { totalCount: 0, currentCount: 0 }
-    : { currentCount: 0 };
-
-  await PairStats.findOneAndUpdate(
-    { pair: pairKey },
-    { $set: update },
-    { upsert: true }
-  );
-
-  res.json({ success: true, cleared: pairKey });
+  res.json({ success: true, cleared: `${user1} ↔ ${user2}` });
 });
-
 
 // ✅ Delete a user (Admin only)
 app.delete('/user/:username', async (req, res) => {
@@ -298,3 +206,4 @@ app.delete('/user/:username', async (req, res) => {
 });
 
 server.listen(4000, () => console.log('✅ Server running on port 4000'));
+
