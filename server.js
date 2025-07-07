@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
 const { Server } = require('socket.io');
-const PairStats = require('./models/PairStats');
+
 const cors = require('cors');
 require('dotenv').config();
 
@@ -15,7 +15,10 @@ app.use(cors({
 app.use(express.json());
 
 const server = http.createServer(app);
+const PairStats = require('./models/PairStats');
+const UserStats = require('./models/UserStats');
 
+const loginTimestamps = {};
 const io = new Server(server, {
   cors: {
     origin: 'https://20years-jee-pyq.netlify.app',
@@ -32,7 +35,8 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true },
   password: String,
-  sessionDuration: { type: Number, default: 0 }  // 🆕 Lifetime usage in minutes
+  sessionDuration: { type: Number, default: 0 },  // 🆕 Lifetime usage in minutes
+  lastSeen: { type: Date, default: null }        // Last seen timestamp
 });
 
 // ✅ Update message schema to include tag
@@ -51,19 +55,46 @@ const Message = mongoose.model('Message', messageSchema);
 let onlineUsers = {};
 
 io.on('connection', (socket) => {
-  socket.on('login', (username) => {
-    onlineUsers[username] = socket.id;
-    io.emit('onlineUsers', Object.keys(onlineUsers));
-  });
+ socket.on('login', async (username) => {
+  onlineUsers[username] = socket.id;
+  await UserStats.findOneAndUpdate(
+    { username },
+    { $set: { lastSeen: new Date() } },
+    { upsert: true }
+  );
+  io.emit('onlineUsers', Object.keys(onlineUsers));
+});
 
-  socket.on('logout', (username) => {
-    delete onlineUsers[username];
-    io.emit('onlineUsers', Object.keys(onlineUsers));
-  });
 
-  socket.on('disconnect', () => {
+  socket.on('logout', async (username) => {
+  delete onlineUsers[username];
+
+  const userStat = await UserStats.findOne({ username });
+  const now = new Date();
+
+  if (userStat?.lastSeen) {
+    const diff = Math.floor((now - userStat.lastSeen) / (1000 * 60)); // minutes
+    await UserStats.findOneAndUpdate(
+      { username },
+      {
+        $inc: { totalUsageMinutes: diff },
+        $set: { lastSeen: now }
+      },
+      { upsert: true }
+    );
+  }
+
+  io.emit('onlineUsers', Object.keys(onlineUsers));
+});
+
+
+
+  socket.on('disconnect', async () => {
     for (const [username, id] of Object.entries(onlineUsers)) {
-      if (id === socket.id) delete onlineUsers[username];
+      if (id === socket.id) 
+        await updateSessionAndLastSeen(username); // ✅ Allowed here
+        delete onlineUsers[username];
+        delete loginTimestamps[username];
     }
     io.emit('onlineUsers', Object.keys(onlineUsers));
   });
@@ -163,17 +194,25 @@ app.get('/messages', async (req, res) => {
 });
 
 // ✅ Admin Panel — All Users Info
+// ✅ Admin Panel — All Users Info
 app.get('/admin', async (req, res) => {
   const { user } = req.query;
   if (user !== 'aniketadmin') return res.status(403).json({ message: 'Unauthorized' });
 
   const users = await User.find();
-  const userData = users.map(u => ({
-    username: u.username,
-    password: '•••••••',
-    online: onlineUsers[u.username] ? true : false,
-    sessionDuration: u.sessionDuration || 0  // 🆕 add lifetime usage
-  }));
+  const stats = await UserStats.find();
+
+  const userData = users.map(u => {
+    const stat = stats.find(s => s.username === u.username);
+    return {
+      username: u.username,
+      password: '•••••••',
+      online: onlineUsers[u.username] ? true : false,
+      totalUsageMinutes: stat?.totalUsageMinutes || 0,
+      lastSeen: onlineUsers[u.username] ? 'Online' : (stat?.lastSeen ? stat.lastSeen.toISOString() : 'N/A')
+    };
+  });
+
   res.json(userData);
 });
 
