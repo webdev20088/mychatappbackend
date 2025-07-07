@@ -31,7 +31,8 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
 
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true },
-  password: String
+  password: String,
+  sessionDuration: { type: Number, default: 0 }  // 🆕 Lifetime usage in minutes
 });
 
 // ✅ Update message schema to include tag
@@ -83,8 +84,13 @@ io.on('connection', (socket) => {
     { upsert: true, new: true }
   );
 
+  // 🆕 Increment lifetime usage (1 minute per message)
+  await User.updateOne({ username: sender }, { $inc: { sessionDuration: 1 } });
+  await User.updateOne({ username: receiver }, { $inc: { sessionDuration: 1 } });
+
   io.to(room).emit('newMessage', msg);
 });
+
 
 
 
@@ -165,7 +171,8 @@ app.get('/admin', async (req, res) => {
   const userData = users.map(u => ({
     username: u.username,
     password: '•••••••',
-    online: onlineUsers[u.username] ? true : false
+    online: onlineUsers[u.username] ? true : false,
+    sessionDuration: u.sessionDuration || 0  // 🆕 add lifetime usage
   }));
   res.json(userData);
 });
