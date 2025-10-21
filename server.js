@@ -23,7 +23,10 @@ const io = new Server(server, {
   }
 });
 
-// ✅ MongoDB connection
+// ---------------------- CONFIG: change this to test ----------------------
+const WATCH_USER = process.env.WATCH_USER || 'aaa'; // default 'aaa' - change to 'flora' or other for testing
+
+// ---------------------- MongoDB connection ----------------------
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.log(err));
@@ -32,11 +35,9 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true },
   password: String,
-  // added lastSeen to persist last online time
   lastSeen: { type: Date, default: null }
 });
 
-// Message schema with tag + reactions + edited/deleted metadata
 const messageSchema = new mongoose.Schema({
   sender: String,
   receiver: String,
@@ -50,7 +51,6 @@ const messageSchema = new mongoose.Schema({
       emoji: String
     }
   ],
-  // New fields for edit/delete features
   edited: { type: Boolean, default: false },
   editedAt: { type: Date, default: null },
   deleted: { type: Boolean, default: false },
@@ -63,6 +63,12 @@ const Message = mongoose.model('Message', messageSchema);
 // ---------------------- Runtime state ----------------------
 let onlineUsers = {}; // username -> socket.id
 
+// track whether we've already emitted an alert for WATCH_USER this online session
+let sentAlertFor = {}; // username -> boolean
+
+// ensure initial false
+sentAlertFor[WATCH_USER] = false;
+
 // ---------------------- Socket.IO ----------------------
 io.on('connection', (socket) => {
   // login: associate username -> socket.id
@@ -74,6 +80,14 @@ io.on('connection', (socket) => {
       await User.findOneAndUpdate({ username }, { lastSeen: null });
 
       io.emit('onlineUsers', Object.keys(onlineUsers));
+
+      // If this login is for our WATCH_USER, and we haven't alerted yet in this session -> emit alert once
+      if (username === WATCH_USER && !sentAlertFor[WATCH_USER]) {
+        sentAlertFor[WATCH_USER] = true;
+        // emit to all connected clients (they can decide to email)
+        io.emit('userOnlineAlert', { username: WATCH_USER });
+        console.log(`Alert emitted: ${WATCH_USER} came online`);
+      }
     } catch (err) {
       console.log('Error during login handler:', err);
     }
@@ -86,6 +100,12 @@ io.on('connection', (socket) => {
 
       // set lastSeen on explicit logout
       await User.findOneAndUpdate({ username }, { lastSeen: new Date() });
+
+      // reset alert state for this user so next login will re-alert
+      if (username === WATCH_USER) {
+        sentAlertFor[WATCH_USER] = false;
+        console.log(`Reset alert state for ${WATCH_USER} due to logout`);
+      }
 
       io.emit('onlineUsers', Object.keys(onlineUsers));
     } catch (err) {
@@ -107,6 +127,12 @@ io.on('connection', (socket) => {
       // set lastSeen for the disconnected user (if found)
       if (disconnectedUser) {
         await User.findOneAndUpdate({ username: disconnectedUser }, { lastSeen: new Date() });
+
+        // reset alert state for WATCH_USER if it's the one who disconnected
+        if (disconnectedUser === WATCH_USER) {
+          sentAlertFor[WATCH_USER] = false;
+          console.log(`Reset alert state for ${WATCH_USER} due to disconnect`);
+        }
       }
 
       io.emit('onlineUsers', Object.keys(onlineUsers));
@@ -134,19 +160,15 @@ io.on('connection', (socket) => {
       const msg = await Message.findById(messageId);
       if (!msg) return;
 
-      // Check if user already reacted with any emoji
       const existingIndex = msg.reactions.findIndex(r => r.user === user);
 
       if (existingIndex !== -1) {
         if (msg.reactions[existingIndex].emoji === emoji) {
-          // Same emoji → remove (unreact)
           msg.reactions.splice(existingIndex, 1);
         } else {
-          // Replace with new emoji
           msg.reactions[existingIndex].emoji = emoji;
         }
       } else {
-        // Add new reaction
         msg.reactions.push({ user, emoji });
       }
 
@@ -164,7 +186,6 @@ io.on('connection', (socket) => {
         { sender: user2, receiver: user1, read: false },
         { $set: { read: true } }
       );
-      // Only notify the sender (user2) if they are online
       const senderSocketId = onlineUsers[user2];
       if (senderSocketId) {
         io.to(senderSocketId).emit('refresh');
@@ -196,9 +217,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ---------------------- New: Delete Message (sender OR receiver) ----------------------
-  // Payload expected: { messageId, user, room }
-  // Both sender and receiver are allowed to trigger delete.
+  // Delete message (unchanged)
   socket.on('deleteMessage', async ({ messageId, user, room }) => {
     try {
       if (!messageId || !user) return;
@@ -206,27 +225,22 @@ io.on('connection', (socket) => {
       const msg = await Message.findById(messageId);
       if (!msg) return;
 
-      // Only allow if the requesting user is either sender or receiver
       if (user !== msg.sender && user !== msg.receiver) {
-        // unauthorized attempt - ignore
         return;
       }
 
-      // Mark deleted and note who deleted it. Replace displayed text with "<username> deleted this message"
       msg.deleted = true;
       msg.deletedBy = user;
       msg.message = `${user} deleted this message`;
       await msg.save();
 
-      // Broadcast the updated message to the room
       io.to(room).emit('messageUpdated', msg);
     } catch (err) {
       console.log('Error in deleteMessage:', err);
     }
   });
 
-  // ---------------------- New: Edit Message (ONLY sender) ----------------------
-  // Payload expected: { messageId, user, newText, room }
+  // Edit message (unchanged)
   socket.on('editMessage', async ({ messageId, user, newText, room }) => {
     try {
       if (!messageId || !user || typeof newText !== 'string') return;
@@ -234,19 +248,15 @@ io.on('connection', (socket) => {
       const msg = await Message.findById(messageId);
       if (!msg) return;
 
-      // Only the original sender can edit
       if (user !== msg.sender) {
-        // unauthorized attempt - ignore
         return;
       }
 
-      // Update content and mark edited
       msg.message = newText;
       msg.edited = true;
       msg.editedAt = new Date();
       await msg.save();
 
-      // Broadcast updated message to the room
       io.to(room).emit('messageUpdated', msg);
     } catch (err) {
       console.log('Error in editMessage:', err);
@@ -255,9 +265,7 @@ io.on('connection', (socket) => {
 
 });
 
-// ---------------------- REST API ----------------------
-
-// Signup API
+// ---------------------- REST API ---------------------- (unchanged)
 app.post('/signup', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -271,7 +279,6 @@ app.post('/signup', async (req, res) => {
   }
 });
 
-// Login API
 app.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -285,7 +292,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Get User by Username (now includes online + lastSeen)
 app.get('/user/:username', async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username });
@@ -303,7 +309,6 @@ app.get('/user/:username', async (req, res) => {
   }
 });
 
-// Get Messages Between Users
 app.get('/messages', async (req, res) => {
   try {
     const { user1, user2 } = req.query;
@@ -320,7 +325,6 @@ app.get('/messages', async (req, res) => {
   }
 });
 
-// Admin Panel — All Users Info
 app.get('/admin', async (req, res) => {
   try {
     const { user } = req.query;
@@ -340,7 +344,6 @@ app.get('/admin', async (req, res) => {
   }
 });
 
-// Pairwise Analytics
 app.get('/analytics', async (req, res) => {
   try {
     const { user } = req.query;
@@ -368,7 +371,6 @@ app.get('/analytics', async (req, res) => {
   }
 });
 
-// Admin Trigger: Clear Chat of Any Pair
 app.delete('/analytics/clear', async (req, res) => {
   try {
     const { user, user1, user2 } = req.body;
@@ -387,7 +389,6 @@ app.delete('/analytics/clear', async (req, res) => {
   }
 });
 
-// Delete a user (Admin only)
 app.delete('/user/:username', async (req, res) => {
   try {
     const { user } = req.body;
