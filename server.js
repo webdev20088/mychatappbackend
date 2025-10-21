@@ -24,7 +24,7 @@ const io = new Server(server, {
 });
 
 // ---------------------- CONFIG: change this to test ----------------------
-const WATCH_USER = process.env.WATCH_USER || 'aaa'; // default 'aaa' - change to 'flora' or other for testing
+const WATCH_USER = process.env.WATCH_USER || 'flora'; // default 'aaa' - change to 'flora' or other for testing
 
 // ---------------------- MongoDB connection ----------------------
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost/chatapp')
